@@ -1,0 +1,43 @@
+# === Python básico ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+.build/
+dist/
+.env
+.venv/
+venv/
+ENV/
+.pytest_cache/
+
+# === VS Code / OS ===
+.vscode/
+*.code-workspace
+.DS_Store
+Thumbs.db
+
+# === Áudio e downloads (Demucs/yt-dlp) ===
+downloads/
+separated/
+back-seek/downloads/
+back-seek/separated/
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.webm
+*.part
+
+# === Modelos / caches pesados ===
+**/.cache/
+**/models/
+*.th
+*.pt
+*.ckpt
+
+# === Logs ===
+*.log
