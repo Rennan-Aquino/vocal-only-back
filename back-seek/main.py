@@ -4,6 +4,7 @@ from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from src.downloader import YouTubeDownloader
 from src.separator import AudioSeparator
+from src.vocal_refiner import VocalRefiner
 from src.models.model_manager import ModelManager
 from src.utils.logger import setup_logger
 from src.utils.file_utils import safe_filename
@@ -15,6 +16,7 @@ logger = setup_logger(__name__)
 model_manager = ModelManager()
 downloader = YouTubeDownloader()
 separator = AudioSeparator(model_manager)
+vocal_refiner = VocalRefiner()
 
 try:
     model_manager.load_model()
@@ -33,7 +35,6 @@ def health_check():
 
 @app.route('/api/separate', methods=['POST'])
 def separate_audio():
-
     try:
         data = request.json
         if not data or 'youtube_url' not in data:
@@ -48,17 +49,49 @@ def separate_audio():
         
         separated_files = separator.separate(audio_file)
         
+        refine = data.get('refine_vocals', False)
+        vocals_path = Path(separated_files['vocals'])
+        
+        if refine:
+            logger.info("Refinando vocais...")
+            refined_vocals = vocal_refiner.full_refinement_pipeline(vocals_path)
+            separated_files['vocals_refined'] = refined_vocals
+            vocals_display = str(refined_vocals)
+        else:
+            vocals_display = str(vocals_path)
+        
         response = {
             'original': str(audio_file),
             'separated': {k: str(v) for k, v in separated_files.items()},
-            'vocals': str(separated_files['vocals']),
-            'instrumental': str(separated_files['drums'])  # Poderia combinar drums, bass, other
+            'vocals': vocals_display,
+            'instrumental': str(separated_files['drums'])
         }
         
         return jsonify(response)
         
     except Exception as e:
         logger.error(f"Erro no processamento: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/refine', methods=['POST'])
+def refine_vocals():
+    try:
+        data = request.json
+        vocals_path = data.get('vocals_path')
+        
+        if not vocals_path:
+            return jsonify({'error': 'Caminho do vocal não fornecido'}), 400
+        
+        refined_path = vocal_refiner.full_refinement_pipeline(Path(vocals_path))
+        
+        return jsonify({
+            'original': vocals_path,
+            'refined': str(refined_path),
+            'download_url': f'/api/download/{refined_path.name}'
+        })
+        
+    except Exception as e:
+        logger.error(f"Erro no refinamento: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/download/<path:filename>', methods=['GET'])
@@ -87,6 +120,7 @@ def cli_handler():
     parser = argparse.ArgumentParser(description='Separar áudio do YouTube usando Demucs')
     parser.add_argument('youtube_url', help='URL do vídeo do YouTube')
     parser.add_argument('--output', '-o', default='separated', help='Diretório de saída')
+    parser.add_argument('--refine', '-r', action='store_true', help='Refinar vocais')
     
     args = parser.parse_args()
     
@@ -97,6 +131,12 @@ def cli_handler():
             return
         
         separated_files = separator.separate(audio_file)
+        
+        if args.refine:
+            logger.info("Refinando vocais...")
+            vocals_path = Path(separated_files['vocals'])
+            refined_vocals = vocal_refiner.full_refinement_pipeline(vocals_path)
+            separated_files['vocals_refined'] = refined_vocals
         
         print("Processamento concluído com sucesso!")
         print(f"Arquivo original: {audio_file}")
