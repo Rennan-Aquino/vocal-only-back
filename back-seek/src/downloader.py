@@ -1,6 +1,6 @@
 import yt_dlp
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Callable
 from .utils.logger import setup_logger
 import subprocess
 import os
@@ -16,16 +16,15 @@ class YouTubeDownloader:
         self.output_dir = output_dir
         self.output_dir.mkdir(exist_ok=True)
     
-    def download_audio(self, youtube_url: str) -> Optional[Path]:
-    
+    def download_audio(self, youtube_url: str, progress_callback: Callable = None) -> Optional[Path]:
         try:
             try:
-                return self._download_and_convert(youtube_url)
+                return self._download_and_convert(youtube_url, progress_callback)
             except Exception as e:
                 logger.warning(f"Tentativa 1 falhou: {e}")
             
             try:
-                return self._download_direct(youtube_url)
+                return self._download_direct(youtube_url, progress_callback)
             except Exception as e:
                 logger.warning(f"Tentativa 2 falhou: {e}")
                 raise Exception("Todas as tentativas de download falharam")
@@ -34,15 +33,22 @@ class YouTubeDownloader:
             logger.error(f"Erro no download: {e}")
             return None
     
-    def _download_and_convert(self, youtube_url: str) -> Path:
+    def _download_and_convert(self, youtube_url: str, progress_callback: Callable = None) -> Path:
         try:
             output_base = self.output_dir / "audio_temp"
+            
+            # Callback de progresso para yt-dlp
+            def yt_dlp_progress_hook(d):
+                if progress_callback and d['status'] == 'downloading':
+                    progress = d.get('downloaded_bytes', 0) / d.get('total_bytes', 1) * 100
+                    progress_callback(min(progress, 100))
             
             ydl_opts = {
                 'format': 'bestaudio[ext=m4a]',
                 'outtmpl': str(output_base) + '.%(ext)s',
                 'restrictfilenames': True,
                 'quiet': False,
+                'progress_hooks': [yt_dlp_progress_hook],
             }
             
             logger.info(f"Baixando áudio como M4A: {youtube_url}")
@@ -50,6 +56,9 @@ class YouTubeDownloader:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(youtube_url, download=True)
                 m4a_path = Path(ydl.prepare_filename(info))
+            
+            if progress_callback:
+                progress_callback(50)  # 50% após download completo
             
             wav_path = m4a_path.with_suffix('.wav')
             logger.info(f"Convertendo {m4a_path} para WAV...")
@@ -73,6 +82,9 @@ class YouTubeDownloader:
             if m4a_path.exists():
                 m4a_path.unlink()
             
+            if progress_callback:
+                progress_callback(100)  # 100% após conversão completa
+            
             logger.info(f"Conversão concluída: {wav_path}")
             return wav_path
             
@@ -80,15 +92,22 @@ class YouTubeDownloader:
             self.cleanup_temp_files()
             raise e
     
-    def _download_direct(self, youtube_url: str) -> Path:
+    def _download_direct(self, youtube_url: str, progress_callback: Callable = None) -> Path:
         try:
             output_path = self.output_dir / "audio_direct.%(ext)s"
+            
+            # Callback de progresso para yt-dlp
+            def yt_dlp_progress_hook(d):
+                if progress_callback and d['status'] == 'downloading':
+                    progress = d.get('downloaded_bytes', 0) / d.get('total_bytes', 1) * 100
+                    progress_callback(min(progress, 100))
             
             ydl_opts = {
                 'format': 'bestaudio',
                 'outtmpl': str(output_path),
                 'restrictfilenames': True,
                 'quiet': False,
+                'progress_hooks': [yt_dlp_progress_hook],
             }
             
             logger.info(f"Baixando áudio direto: {youtube_url}")
@@ -96,6 +115,9 @@ class YouTubeDownloader:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(youtube_url, download=True)
                 audio_path = Path(ydl.prepare_filename(info))
+            
+            if progress_callback:
+                progress_callback(100)  # 100% após download completo
             
             logger.info(f"Download direto concluído: {audio_path}")
             return audio_path

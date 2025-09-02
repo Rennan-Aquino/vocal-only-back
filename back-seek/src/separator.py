@@ -1,14 +1,51 @@
 import torch
 from demucs.apply import apply_model
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Callable
 from .utils.logger import setup_logger
 from .models.model_manager import ModelManager
 import soundfile as sf
 import numpy as np
 import torchaudio
+import time
+import re
+import sys
+from io import StringIO
 
 logger = setup_logger(__name__)
+
+class DemucsProgressCapture(StringIO):
+    """Captura a saída do Demucs e extrai o progresso real"""
+    def __init__(self, progress_callback=None):
+        super().__init__()
+        self.progress_callback = progress_callback
+        self.buffer = ""
+        
+    def write(self, text):
+        self.buffer += text
+        # Processa o buffer para encontrar o progresso
+        self._process_buffer()
+        
+    def _process_buffer(self):
+        """Processa o buffer para extrair o progresso da barra do Demucs"""
+        lines = self.buffer.split('\r')
+        if lines:
+            last_line = lines[-1].strip()
+            
+            # Padrão da barra de progresso do Demucs: "XX%|█████| XXX/XXX [XX:XX<XX:XX, X.XXs/it]"
+            progress_match = re.search(r'(\d+)%\|', last_line)
+            if progress_match:
+                progress = int(progress_match.group(1))
+                if self.progress_callback:
+                    self.progress_callback(progress)
+            
+            # Também loga a linha completa
+            if last_line and '%|' in last_line:
+                logger.info(f"Demucs: {last_line}")
+                
+        # Limpa o buffer se ficar muito grande
+        if len(self.buffer) > 1000:
+            self.buffer = ""
 
 class AudioSeparator:
     
@@ -58,7 +95,7 @@ class AudioSeparator:
             logger.error(f"Erro ao carregar áudio: {e}")
             raise
     
-    def separate(self, audio_path: Path) -> Dict[str, Path]:
+    def separate(self, audio_path: Path, progress_callback: Callable = None) -> Dict[str, Path]:
         """
         Separa o áudio em componentes (vocals, drums, bass, other)
         """
@@ -67,22 +104,40 @@ class AudioSeparator:
             wav = self._load_audio(audio_path)
             model = self.model_manager.get_model()
             
-            # Aplicar modelo - 🔥 AGORA com áudio estéreo correto
+            # Aplicar modelo com captura de progresso
             logger.info("Iniciando separação de áudio...")
+            start_time = time.time()
+            
+            # Configura captura de progresso
+            progress_capture = DemucsProgressCapture(progress_callback)
+            original_stdout = sys.stdout
+            
             with torch.no_grad():
-                sources = apply_model(
-                    model, 
-                    wav.unsqueeze(0),  # Adiciona dimensão batch [1, 2, samples]
-                    device=self.model_manager.device,
-                    progress=True
-                )
+                # Redireciona a saída padrão para capturar o progresso
+                sys.stdout = progress_capture
+                try:
+                    sources = apply_model(
+                        model, 
+                        wav.unsqueeze(0),  # Adiciona dimensão batch [1, 2, samples]
+                        device=self.model_manager.device,
+                        progress=True
+                    )
+                finally:
+                    # Restaura a saída padrão
+                    sys.stdout = original_stdout
+            
+            separation_time = time.time() - start_time
+            logger.info(f"Separação concluída em {separation_time:.2f} segundos")
+            
+            if progress_callback:
+                progress_callback(100)  # 100% após separação completa
             
             # Salvar resultados
             stem_names = ['vocals', 'drums', 'bass', 'other']
             result_files = {}
             
             for i, stem in enumerate(stem_names):
-                output_file = self.output_dir / f"{audio_path.stem}_{stem}.wav"
+                output_file = self.output_dir / f"{audio_path.stem}_{stem}.mp3"
                 
                 # Pega o áudio e converte para [samples, canais] para soundfile
                 audio_data = sources[0, i].cpu().numpy()  # [2, samples]
@@ -96,5 +151,8 @@ class AudioSeparator:
             return result_files
             
         except Exception as e:
+            # Garante que a saída padrão seja restaurada mesmo em caso de erro
+            if 'original_stdout' in locals():
+                sys.stdout = original_stdout
             logger.error(f"Erro na separação de áudio: {e}")
             raise

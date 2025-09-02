@@ -2,11 +2,12 @@ import soundfile as sf
 import numpy as np
 import noisereduce as nr
 from pathlib import Path
+from typing import Callable
 from .utils.logger import setup_logger
 import subprocess
 import os
 import shutil
-import time  # 🆕 IMPORT DO TEMPO
+import time
 
 logger = setup_logger(__name__)
 
@@ -16,7 +17,7 @@ class VocalRefiner:
     def __init__(self, ffmpeg_path: str = None):
         self.ffmpeg_path = ffmpeg_path or r"C:\Users\Rennan\tools\ffmpeg-master-latest-win64-gpl\ffmpeg-master-latest-win64-gpl\bin"
     
-    def refine_with_ffmpeg(self, input_path: Path, output_path: Path):
+    def refine_with_ffmpeg(self, input_path: Path, output_path: Path, progress_callback: Callable = None):
         """Refina vocais usando FFmpeg - VERSÃO RÁPIDA E CONFIÁVEL"""
         try:
             ffmpeg_exe = os.path.join(self.ffmpeg_path, "ffmpeg.exe")
@@ -40,6 +41,9 @@ class VocalRefiner:
             if result.returncode != 0:
                 raise Exception(f"FFmpeg refinement failed: {result.stderr}")
             
+            if progress_callback:
+                progress_callback(100)  # 100% após processamento completo
+            
             logger.info(f"Vocais refinados com FFmpeg: {output_path}")
             return True
             
@@ -47,7 +51,7 @@ class VocalRefiner:
             logger.error(f"Erro no refinamento FFmpeg: {e}")
             return False
     
-    def refine_with_noisereduce(self, input_path: Path, output_path: Path):
+    def refine_with_noisereduce(self, input_path: Path, output_path: Path, progress_callback: Callable = None):
         """Refina vocais usando noise reduction - VERSÃO CONFIÁVEL"""
         try:
             # Carrega o áudio
@@ -57,6 +61,8 @@ class VocalRefiner:
             if len(data) < 1024:
                 logger.warning(f"Áudio muito curto ({len(data)} amostras). Pulando noise reduction.")
                 sf.write(output_path, data, sr)
+                if progress_callback:
+                    progress_callback(100)  # 100% mesmo pulando
                 return True
             
             # Garante que é mono
@@ -74,6 +80,9 @@ class VocalRefiner:
             # Salva o resultado
             sf.write(output_path, reduced_noise, sr)
             
+            if progress_callback:
+                progress_callback(100)  # 100% após processamento completo
+            
             logger.info(f"Noise reduction aplicado: {output_path}")
             return True
             
@@ -81,11 +90,13 @@ class VocalRefiner:
             logger.error(f"Erro no noise reduction: {e}")
             # Fallback: copia o arquivo original
             shutil.copy2(input_path, output_path)
+            if progress_callback:
+                progress_callback(100)  # 100% mesmo com fallback
             return True
     
-    def full_refinement_pipeline(self, input_path: Path, output_dir: Path = None):
+    def full_refinement_pipeline(self, input_path: Path, output_dir: Path = None, progress_callback: Callable = None):
         """Pipeline completo de refinamento vocal - COM TIMING"""
-        start_time = time.time()  # 🆕 MARCA TEMPO INICIAL
+        start_time = time.time()
         
         try:
             if output_dir is None:
@@ -101,13 +112,15 @@ class VocalRefiner:
             temp_path = output_dir / "temp_refined.wav"
             
             nr_start = time.time()
-            if self.refine_with_noisereduce(input_path, temp_path):
+            if self.refine_with_noisereduce(input_path, temp_path, 
+                                          lambda p: progress_callback(p * 0.5) if progress_callback else None):
                 nr_time = time.time() - nr_start
                 logger.info(f"✅ Noise reduction concluído em {nr_time:.2f}s")
                 
                 # Depois processamento com FFmpeg
                 ffmpeg_start = time.time()
-                if self.refine_with_ffmpeg(temp_path, output_path):
+                if self.refine_with_ffmpeg(temp_path, output_path, 
+                                         lambda p: progress_callback(50 + p * 0.5) if progress_callback else None):
                     ffmpeg_time = time.time() - ffmpeg_start
                     logger.info(f"✅ FFmpeg processing concluído em {ffmpeg_time:.2f}s")
                     
